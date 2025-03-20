@@ -17,6 +17,7 @@ WAITING_FOR_CAPTION = 3
 PREVIEW_POST = 4
 EDIT_POST = 5
 WAITING_FOR_NEW_CAPTION = 6
+WAITING_FOR_URL = 7
 
 # Константы для типов медиа
 PHOTO = 'photo'
@@ -33,10 +34,21 @@ reactions = {}
 def get_post_buttons(post_id, include_edit=False):
     logger.debug(f"Creating buttons for post_id: {post_id}, include_edit: {include_edit}")
     
-    # Новые кнопки для взаимодействия
+    # Получаем данные поста
+    post_data = None
+    for user_data in posts_data.values():
+        if user_data.get('post_id') == post_id:
+            post_data = user_data
+            break
+    
+    hh_url = "https://hh.ru/"  # URL по умолчанию
+    if post_data and 'hh_url' in post_data:
+        hh_url = post_data['hh_url']
+    
+    # Кнопки для взаимодействия
     buttons = [[
         InlineKeyboardButton("💬 Чат с рекрутером", callback_data=f'chat_{post_id}'),
-        InlineKeyboardButton("🔍 Откликнуться на hh", url="https://hh.ru/")
+        InlineKeyboardButton("🔍 Откликнуться на hh", url=hh_url)
     ]]
     
     if include_edit:
@@ -136,13 +148,49 @@ async def handle_caption(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     posts_data[user_id]['caption'] = update.message.text
     logger.debug(f"Added caption to post: {posts_data[user_id]}")
+    
+    # Запрашиваем URL для кнопки
+    await update.message.reply_text(
+        "Отправьте URL вакансии на hh.ru для кнопки 'Откликнуться на hh' или используйте /skip для стандартной ссылки"
+    )
+    return WAITING_FOR_URL
+
+#обработка url
+async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    logger.info(f"Handling URL from user {user_id}")
+    
+    if user_id not in posts_data:
+        logger.error(f"User {user_id} not found in posts_data")
+        await update.message.reply_text("Произошла ошибка. Начните сначала с /post")
+        return ConversationHandler.END
+    
+    url = update.message.text.strip()
+    # Базовая проверка URL
+    if not (url.startswith('http://') or url.startswith('https://')):
+        url = 'https://' + url
+    
+    posts_data[user_id]['hh_url'] = url
+    logger.debug(f"Added URL to post: {posts_data[user_id]}")
+    return await preview_post(update, context)
+
+#пропуск url
+async def skip_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    logger.info(f"User {user_id} skipped URL")
+    posts_data[user_id]['hh_url'] = 'https://hh.ru/'
     return await preview_post(update, context)
 
 async def skip_caption(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     logger.info(f"User {user_id} skipped caption")
     posts_data[user_id]['caption'] = ''
-    return await preview_post(update, context)
+    
+    # Запрашиваем URL для кнопки
+    await update.message.reply_text(
+        "Отправьте URL вакансии на hh.ru для кнопки 'Откликнуться на hh' или используйте /skip для стандартной ссылки"
+    )
+    return WAITING_FOR_URL
 
 async def preview_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -329,6 +377,10 @@ def main():
                 WAITING_FOR_CAPTION: [
                     MessageHandler(filters.TEXT & ~filters.COMMAND, handle_caption),
                     CommandHandler('skip', skip_caption)
+                ],
+                WAITING_FOR_URL: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url),
+                    CommandHandler('skip', skip_url)
                 ],
                 PREVIEW_POST: [
                     CallbackQueryHandler(button_callback)
