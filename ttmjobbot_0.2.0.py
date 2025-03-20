@@ -36,7 +36,7 @@ def get_post_buttons(post_id, include_edit=False):
     # Новые кнопки для взаимодействия
     buttons = [[
         InlineKeyboardButton("💬 Чат с рекрутером", callback_data=f'chat_{post_id}'),
-        InlineKeyboardButton("🔍 Откликнуться на hh", callback_data=f'respond_{post_id}')
+        InlineKeyboardButton("🔍 Откликнуться на hh", url="https://hh.ru/")
     ]]
     
     if include_edit:
