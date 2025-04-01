@@ -1,5 +1,8 @@
 import logging
 import time
+import os
+import io
+import asyncio
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler, ConversationHandler
 
@@ -24,6 +27,10 @@ PHOTO = 'photo'
 VIDEO = 'video'
 DOCUMENT = 'doc'
 
+# Путь к изображению по умолчанию
+DEFAULT_IMAGE_PATH = os.path.join('images', 'default_image.jpg')
+DEFAULT_IMAGE_FILE_ID = None  # Сюда будет сохранен file_id изображения по умолчанию
+
 # ID канала (замените на ваш)
 CHANNEL_ID = "-1002309808938"  # Замените на ID вашего канала
 
@@ -45,9 +52,12 @@ def get_post_buttons(post_id, include_edit=False):
     if post_data and 'hh_url' in post_data:
         hh_url = post_data['hh_url']
     
-    # Кнопки для взаимодействия
+    # Кнопки для взаимодействия с прямым URL для чата с рекрутером
+    recruiter_username = "Liia4"
+    chat_url = f"https://t.me/{recruiter_username}"
+    
     buttons = [[
-        InlineKeyboardButton("💬 Чат с рекрутером", callback_data=f'chat_{post_id}'),
+        InlineKeyboardButton("💬 Чат с рекрутером", url=chat_url),
         InlineKeyboardButton("🔍 Откликнуться на hh", url=hh_url)
     ]]
     
@@ -94,13 +104,82 @@ async def media_type_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     logger.info(f"User {user_id} selected media type: {media_type}")
     
     media_messages = {
-        'photo': "Отправьте фото",
+        'photo': "Выберите источник фото:",
         'video': "Отправьте видео",
         'doc': "Отправьте документ"
     }
     
-    await query.message.edit_text(media_messages[media_type])
-    return WAITING_FOR_MEDIA
+    if media_type == 'photo':
+        if DEFAULT_IMAGE_FILE_ID:
+            keyboard = [
+                [InlineKeyboardButton("Использовать фото по умолчанию", callback_data='use_default_image')],
+                [InlineKeyboardButton("Загрузить свое фото", callback_data='upload_own_image')],
+                [InlineKeyboardButton("Вернуться к выбору типа медиа", callback_data='back_to_media_type')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.message.edit_text(media_messages[media_type], reply_markup=reply_markup)
+            return CHOOSING_MEDIA_TYPE
+        else:
+            await query.message.edit_text("Отправьте фото")
+            return WAITING_FOR_MEDIA
+    else:
+        await query.message.edit_text(media_messages[media_type])
+        return WAITING_FOR_MEDIA
+
+async def handle_default_image_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = update.effective_user.id
+    choice = query.data
+    
+    if choice == 'use_default_image':
+        # Пользователь выбрал изображение по умолчанию
+        logger.info(f"User {user_id} chose to use default image")
+        
+        # Создаем пост с изображением по умолчанию
+        post_id = f"post_{user_id}_{int(time.time())}"
+        posts_data[user_id] = {
+            'media_type': PHOTO,
+            'file_id': DEFAULT_IMAGE_FILE_ID,
+            'post_id': post_id
+        }
+        
+        await query.message.edit_text("Отправьте подпись к публикации или используйте /skip для публикации без подписи")
+        return WAITING_FOR_CAPTION
+    
+    elif choice == 'upload_own_image':
+        # Пользователь выбрал загрузить свое изображение
+        logger.info(f"User {user_id} chose to upload own image")
+        await query.message.edit_text("Отправьте фото")
+        return WAITING_FOR_MEDIA
+    
+    return CHOOSING_MEDIA_TYPE
+
+async def load_default_image(context):
+    global DEFAULT_IMAGE_FILE_ID
+    
+    try:
+        # Проверяем, существует ли файл
+        if not os.path.exists(DEFAULT_IMAGE_PATH):
+            logger.error(f"Default image not found at path: {DEFAULT_IMAGE_PATH}")
+            return
+            
+        # Открываем и читаем изображение
+        with open(DEFAULT_IMAGE_PATH, 'rb') as img_file:
+            img_bytes = img_file.read()
+        
+        # Отправляем изображение через API и получаем file_id
+        message = await context.bot.send_photo(
+            chat_id=context.bot.id,  # Отправляем боту
+            photo=io.BytesIO(img_bytes)
+        )
+        
+        DEFAULT_IMAGE_FILE_ID = message.photo[-1].file_id
+        logger.info(f"Default image loaded with file_id: {DEFAULT_IMAGE_FILE_ID}")
+    except Exception as e:
+        logger.error(f"Failed to load default image: {str(e)}") 
 
 async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -155,7 +234,6 @@ async def handle_caption(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return WAITING_FOR_URL
 
-#обработка url
 async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     logger.info(f"Handling URL from user {user_id}")
@@ -174,7 +252,6 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.debug(f"Added URL to post: {posts_data[user_id]}")
     return await preview_post(update, context)
 
-#пропуск url
 async def skip_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     logger.info(f"User {user_id} skipped URL")
@@ -320,14 +397,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await query.answer()
                 return ConversationHandler.END
         
-        # Обработка новых действий кнопок
-        if action == 'chat':
-            await query.answer(text="Переход в чат с рекрутером")
-            # Здесь можно добавить логику для открытия чата с рекрутером
-            
-        elif action == 'respond':
-            await query.answer(text="Переход на страницу отклика hh.ru")
-            # Здесь можно добавить логику для перехода на hh.ru
+        # Обработка других типов callback-данных, если необходимо
+        # Поскольку кнопка "Чат с рекрутером" теперь использует URL-параметр, 
+        # то нам не нужно обрабатывать её тут - Telegram сам откроет URL
+        await query.answer()
         
     except Exception as e:
         logger.error(f"Error in button callback: {str(e)}")
@@ -361,13 +434,21 @@ def main():
     try:
         # Создаём приложение и передаём токен бота
         application = Application.builder().token("7652918855:AAF8ywxV7GPrd-Ng4Cdsmhv25StkLvxGx2E").build()
-
-        # Создаем обработчик разговора
+        
+        # Добавляем задачу загрузки изображения по умолчанию при запуске
+        async def start_load_default_image(app):
+            await load_default_image(app)
+        
+        application.post_init = start_load_default_image
+        
+        # Создаем обработчик разговора с обновленными обработчиками
         conv_handler = ConversationHandler(
             entry_points=[CommandHandler('post', start_post)],
             states={
                 CHOOSING_MEDIA_TYPE: [
-                    CallbackQueryHandler(media_type_callback, pattern='^type_')
+                    CallbackQueryHandler(media_type_callback, pattern='^type_'),
+                    CallbackQueryHandler(handle_default_image_choice, pattern='^use_default_image$|^upload_own_image$'),
+                    CallbackQueryHandler(start_post, pattern='^back_to_media_type$')  # Добавьте эту строку
                 ],
                 WAITING_FOR_MEDIA: [
                     MessageHandler(filters.PHOTO, handle_media),
