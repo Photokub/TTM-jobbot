@@ -32,7 +32,8 @@ DEFAULT_IMAGE_PATH = os.path.join('images', 'default_image.jpg')
 DEFAULT_IMAGE_FILE_ID = None  # Сюда будет сохранен file_id изображения по умолчанию
 
 # ID канала (замените на ваш)
-CHANNEL_ID = "-1002309808938"  # Замените на ID вашего канала
+CHANNEL_ID = "-1002309808938"  # наш тестовый канал
+# CHANNEL_ID = "-1002481490079"  # чистовой канал
 
 # Хранилище для данных постов
 posts_data = {}
